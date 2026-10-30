@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+source "$SNAP/libexec/mlx-serve/config.sh"
+mlx_load_daemon_config
+mlx_validate_daemon_config
+
+daemon_service="$SNAP_INSTANCE_NAME.daemon"
+if [[ "$MLX_DAEMON_ENABLED" != true ]]; then
+    snapctl stop --disable "$daemon_service"
+    exit 0
+fi
+
+daemon_status="$(snapctl services "$daemon_service")"
+daemon_active=false
+while read -r service _ current _; do
+    if [[ "$service" == "$daemon_service" && "$current" == active ]]; then
+        daemon_active=true
+    fi
+done <<< "$daemon_status"
+
+snapctl start --enable "$daemon_service"
+if [[ "$daemon_active" == true ]]; then
+    snapctl restart "$daemon_service"
+fi

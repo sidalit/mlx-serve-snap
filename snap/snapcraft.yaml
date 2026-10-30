@@ -1,0 +1,453 @@
+name: mlx-serve
+base: core24
+version: '26.10.3'
+title: MLX-Serve
+summary: Local model inference with OpenAI, Anthropic and Ollama APIs
+description: |
+  Run local models through a native command-line server and browser console.
+  MLX-Serve provides OpenAI, Anthropic and Ollama-compatible HTTP APIs and
+  downloads models from Hugging Face.
+
+  This Linux package requires a supported NVIDIA GPU and host driver 580 or
+  newer. It includes the CUDA runtime and supports amd64 and arm64 systems.
+  The optional system daemon is disabled until explicitly configured.
+grade: stable
+confinement: strict
+license: MIT
+icon: snap/gui/mlx-serve.png
+website: https://github.com/ddalcu/mlx-serve
+contact: https://github.com/sidalit/mlx-serve-snap/issues
+source-code:
+  - https://github.com/sidalit/mlx-serve-snap
+  - https://github.com/ddalcu/mlx-serve
+issues:
+  - https://github.com/sidalit/mlx-serve-snap/issues
+  - https://github.com/ddalcu/mlx-serve/issues
+
+platforms:
+  amd64:
+  arm64:
+
+package-repositories:
+  - type: apt
+    url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/
+    path: /
+    architectures:
+      - amd64
+    key-id: EB693B3035CD5710E231E123A4B469963BF863CC
+  - type: apt
+    url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/
+    path: /
+    architectures:
+      - arm64
+    key-id: EB693B3035CD5710E231E123A4B469963BF863CC
+
+apps:
+  mlx-serve:
+    command: libexec/mlx-serve/cli.sh
+    plugs:
+      - network
+      - network-bind
+      - opengl
+      - home
+      - removable-media
+  daemon:
+    command: libexec/mlx-serve/daemon.sh
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    stop-timeout: 60s
+    plugs:
+      - network
+      - network-bind
+      - opengl
+
+parts:
+  # The automation follows this one application tag. Other sources remain
+  # independently pinned to the revisions used by this release.
+  mlx-serve-source:
+    plugin: dump
+    source: https://github.com/ddalcu/mlx-serve.git
+    source-tag: v$SNAPCRAFT_PROJECT_VERSION
+    source-depth: 1
+    source-submodules:
+      - lib/opencode2-mlx-serve
+      - lib/mlx-serve-gguf
+      - lib/sushi
+    organize:
+      '*': usr/src/mlx-serve/
+    prime:
+      - -*
+
+  zig:
+    plugin: dump
+    source:
+      - on amd64: https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+      - on arm64: https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz
+    source-type: tar
+    organize:
+      '*': opt/zig/
+    prime:
+      - -*
+
+  json-source:
+    plugin: dump
+    source: https://github.com/nlohmann/json.git
+    source-tag: v3.11.3
+    source-depth: 1
+    source-submodules: []
+    organize:
+      '*': usr/src/json/
+    prime:
+      - -*
+
+  fmt-source:
+    plugin: dump
+    source: https://github.com/fmtlib/fmt.git
+    source-tag: 12.1.0
+    source-depth: 1
+    source-submodules: []
+    organize:
+      '*': usr/src/fmt/
+    prime:
+      - -*
+
+  cccl-source:
+    plugin: dump
+    source: https://github.com/NVIDIA/cccl/releases/download/v3.1.3/cccl-v3.1.3.zip
+    source-type: zip
+    source-subdir: cccl-v3.1.3
+    organize:
+      '*': usr/src/cccl/
+    prime:
+      - -*
+
+  nvtx-source:
+    plugin: dump
+    source: https://github.com/NVIDIA/NVTX.git
+    source-tag: v3.1.1
+    source-depth: 1
+    source-submodules: []
+    organize:
+      '*': usr/src/nvtx/
+    prime:
+      - -*
+
+  cudnn-frontend-source:
+    plugin: dump
+    source: https://github.com/NVIDIA/cudnn-frontend.git
+    source-tag: v1.16.0
+    source-depth: 1
+    source-submodules: []
+    organize:
+      '*': usr/src/cudnn-frontend/
+    prime:
+      - -*
+
+  cutlass-source:
+    plugin: dump
+    source: https://github.com/NVIDIA/cutlass.git
+    source-tag: v4.4.2
+    source-depth: 1
+    source-submodules: []
+    organize:
+      '*': usr/src/cutlass/
+    prime:
+      - -*
+
+  mlx:
+    plugin: nil
+    source: https://github.com/ml-explore/mlx.git
+    source-commit: 64ea011cb65f14d9ce2737e60db9a4ae91ed7441
+    source-depth: 1
+    source-submodules: []
+    after:
+      - mlx-serve-source
+      - json-source
+      - fmt-source
+      - cccl-source
+      - nvtx-source
+      - cudnn-frontend-source
+      - cutlass-source
+    build-packages:
+      - build-essential
+      - cmake
+      - git
+      - cuda-toolkit-13-4
+      - libcudnn9-dev-cuda-13
+      - liblapacke-dev
+      - libopenblas-dev
+    build-environment: &cuda-build-environment
+      - CUDA_HOME: /usr/local/cuda-13.4
+      - PATH: /usr/local/cuda-13.4/bin:$CRAFT_STAGE/opt/zig:$PATH
+      - on amd64:
+          - CUDA_ARCH: '75;86;120'
+          - ZIG_CPU: x86_64_v3
+          - NATIVE_CPU_FLAG: -march=x86-64-v3
+      - on arm64:
+          - CUDA_ARCH: '90;110;121'
+          - ZIG_CPU: baseline
+          - NATIVE_CPU_FLAG: -march=armv8.2-a+dotprod
+    override-build: |
+      set -euo pipefail
+      patches="$CRAFT_STAGE/usr/src/mlx-serve/patches"
+      for patch in \
+        mlx-cuda-lru-consecutive-misses \
+        mlx-cuda-sdpa-head-dim-256-512 \
+        mlx-cuda-qmm-read-weights-once \
+        mlx-cuda-gather-qmm-rhs \
+        mlx-cuda-qmv-rows \
+        mlx-cuda-row-dot-matvec \
+        mlx-cuda-sorted-gather-experts \
+        mlx-cuda-graphs-switch \
+        mlx-cuda-sorted-gather-matvec \
+        mlx-cuda-custom-kernel-disk-cache; do
+        if ! git apply --reverse --check "$patches/$patch.patch" 2>/dev/null; then
+          git apply "$patches/$patch.patch"
+        fi
+      done
+
+      cmake -S . -B snap-build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/lib/mlx \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+        -DCMAKE_C_FLAGS="$NATIVE_CPU_FLAG" \
+        -DCMAKE_CXX_FLAGS="$NATIVE_CPU_FLAG" \
+        -DBUILD_SHARED_LIBS=ON \
+        -DMLX_BUILD_METAL=OFF \
+        -DMLX_BUILD_CPU=ON \
+        -DMLX_BUILD_CUDA=ON \
+        -DMLX_CUDA_ARCHITECTURES="$CUDA_ARCH" \
+        -DMLX_BUILD_PYTHON_BINDINGS=OFF \
+        -DMLX_BUILD_GGUF=OFF \
+        -DMLX_BUILD_TESTS=OFF \
+        -DMLX_BUILD_BENCHMARKS=OFF \
+        -DMLX_BUILD_EXAMPLES=OFF \
+        -DCMAKE_DISABLE_FIND_PACKAGE_NCCL=ON \
+        -DLAPACK_INCLUDE_DIRS=/usr/include \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+        -DFETCHCONTENT_SOURCE_DIR_JSON="$CRAFT_STAGE/usr/src/json" \
+        -DFETCHCONTENT_SOURCE_DIR_FMT="$CRAFT_STAGE/usr/src/fmt" \
+        -DFETCHCONTENT_SOURCE_DIR_CCCL="$CRAFT_STAGE/usr/src/cccl" \
+        -DFETCHCONTENT_SOURCE_DIR_NVTX3="$CRAFT_STAGE/usr/src/nvtx" \
+        -DFETCHCONTENT_SOURCE_DIR_CUDNN="$CRAFT_STAGE/usr/src/cudnn-frontend" \
+        -DFETCHCONTENT_SOURCE_DIR_CUTLASS="$CRAFT_STAGE/usr/src/cutlass"
+      cmake --build snap-build --parallel "$CRAFT_PARALLEL_BUILD_COUNT"
+      DESTDIR="$CRAFT_PART_INSTALL" cmake --install snap-build
+
+      # The server embeds a few Metal source headers even on its Linux build path.
+      mkdir -p "$CRAFT_PART_INSTALL/usr/src/mlx/mlx/backend/metal/kernels"
+      cp -a mlx/backend/metal/kernels/steel \
+        "$CRAFT_PART_INSTALL/usr/src/mlx/mlx/backend/metal/kernels/"
+      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/mlx/LICENSE"
+    prime:
+      - -usr/src
+      - -lib/mlx/lib/cmake
+      - -lib/mlx/share
+
+  mlxc:
+    plugin: nil
+    source: https://github.com/ml-explore/mlx-c.git
+    source-commit: 56b2d39fc831f2c0eb5bb94d82ef7191f7b31fa6
+    source-depth: 1
+    source-submodules: []
+    after:
+      - mlx
+    build-environment: *cuda-build-environment
+    override-build: |
+      set -euo pipefail
+      patches="$CRAFT_STAGE/usr/src/mlx-serve/patches"
+      if ! git apply --reverse --check "$patches/mlxc-gather-qmm-global-scale.patch" 2>/dev/null; then
+        git apply "$patches/mlxc-gather-qmm-global-scale.patch"
+      fi
+      if ! git apply --reverse --check "$patches/mlxc-x86-f16-data-alias.patch" 2>/dev/null; then
+        git apply "$patches/mlxc-x86-f16-data-alias.patch"
+      fi
+      cmake -S . -B snap-build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/lib/mlx \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        -DCMAKE_C_FLAGS="$NATIVE_CPU_FLAG" \
+        -DCMAKE_CXX_FLAGS="$NATIVE_CPU_FLAG" \
+        -DBUILD_SHARED_LIBS=ON \
+        -DMLX_C_USE_SYSTEM_MLX=ON \
+        -DMLX_C_BUILD_EXAMPLES=OFF \
+        -DCMAKE_PREFIX_PATH="$CRAFT_STAGE/lib/mlx" \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+      cmake --build snap-build --target mlxc --parallel "$CRAFT_PARALLEL_BUILD_COUNT"
+      DESTDIR="$CRAFT_PART_INSTALL" cmake --install snap-build
+      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/mlx-c/LICENSE"
+    prime:
+      - -lib/mlx/lib/cmake
+
+  ds4:
+    plugin: nil
+    source: https://github.com/antirez/ds4.git
+    source-commit: 9139e2ae58a41503968a500f36f75895c1ba63fc
+    source-depth: 1
+    source-submodules: []
+    build-packages:
+      - build-essential
+      - cuda-toolkit-13-4
+    build-environment: *cuda-build-environment
+    override-build: |
+      set -euo pipefail
+      # Follow upstream's shared-library build, including hidden ggml stubs and
+      # static GNU C++ runtimes so they cannot replace Zig's exception machinery.
+      IFS=';' read -r -a arches <<< "$CUDA_ARCH"
+      gencode=''
+      for arch in "${arches[@]}"; do
+        case "$arch" in 120|121) arch="${arch}a" ;; esac
+        gencode+=" -gencode arch=compute_$arch,code=[sm_$arch,compute_$arch]"
+      done
+      make_args=("CC=cc -fPIC" "NVCC_ARCH_FLAGS=$gencode")
+      export NVCC_APPEND_FLAGS=-Xcompiler=-fPIC
+      read -r -a objects <<< "$(make -s "${make_args[@]}" \
+        --eval='print-core-objs: ; @echo $(CORE_OBJS)' print-core-objs)"
+      make -j"$CRAFT_PARALLEL_BUILD_COUNT" "${make_args[@]}" "${objects[@]}"
+      printf '{ global: ds4_*; local: *; };\n' > snap-exports.map
+      g++ -shared -o libds4.so "${objects[@]}" \
+        -Wl,-Bsymbolic -Wl,--version-script=snap-exports.map \
+        -static-libstdc++ -static-libgcc -L"$CUDA_HOME/lib64" -lcudart -lcublas
+      install -Dm755 libds4.so "$CRAFT_PART_INSTALL/lib/ds4-linux/libds4.so"
+      mkdir -p "$CRAFT_PART_INSTALL/usr/src/ds4"
+      cp -a ./*.h "$CRAFT_PART_INSTALL/usr/src/ds4/"
+      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/ds4/LICENSE"
+    prime:
+      - -usr/src
+
+  llama:
+    plugin: nil
+    source: https://github.com/ggml-org/llama.cpp.git
+    source-tag: b11429
+    source-depth: 1
+    source-submodules: []
+    build-packages:
+      - build-essential
+      - cmake
+      - cuda-toolkit-13-4
+    build-environment: *cuda-build-environment
+    override-build: |
+      set -euo pipefail
+      cmake -S . -B snap-build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/lib/llama \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_INSTALL_BINDIR=lib \
+        -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+        -DCMAKE_C_FLAGS="$NATIVE_CPU_FLAG" \
+        -DCMAKE_CXX_FLAGS="$NATIVE_CPU_FLAG" \
+        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
+        -DBUILD_SHARED_LIBS=ON \
+        -DGGML_CUDA=ON \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_NATIVE=OFF \
+        -DGGML_CPU_KLEIDIAI=OFF \
+        -DGGML_CUDA_CCCL_VERSION= \
+        -DGGML_CUDA_NCCL=OFF \
+        -DLLAMA_BUILD_COMMON=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_TOOLS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=OFF \
+        -DLLAMA_BUILD_APP=OFF \
+        -DLLAMA_BUILD_UI=OFF \
+        -DLLAMA_BUILD_MTMD=OFF \
+        -DLLAMA_LLGUIDANCE=OFF \
+        -DLLAMA_TOOLS_INSTALL=OFF \
+        -DLLAMA_TESTS_INSTALL=OFF \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+      cmake --build snap-build --parallel "$CRAFT_PARALLEL_BUILD_COUNT"
+      DESTDIR="$CRAFT_PART_INSTALL" cmake --install snap-build
+      printf 'b11429\n' > "$CRAFT_PART_INSTALL/lib/llama/.version"
+      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/llama.cpp/LICENSE"
+    prime:
+      - -lib/llama/include
+      - -lib/llama/lib/cmake
+      - -lib/llama/lib/pkgconfig
+      - -lib/llama/share
+
+  mlx-serve:
+    plugin: nil
+    after:
+      - mlx-serve-source
+      - zig
+      - mlxc
+      - ds4
+      - llama
+    build-packages:
+      - pkg-config
+      - libwebp-dev
+      - libavahi-compat-libdnssd-dev
+    build-environment: *cuda-build-environment
+    override-build: |
+      set -euo pipefail
+      cp -a "$CRAFT_STAGE/usr/src/mlx-serve/." .
+      cp -a "$CRAFT_STAGE/lib/mlx" lib/
+      cp -a "$CRAFT_STAGE/lib/llama" lib/
+      cp -a "$CRAFT_STAGE/lib/ds4-linux" lib/
+      mkdir -p lib/ds4 lib/mlx-src
+      cp -a "$CRAFT_STAGE/usr/src/ds4/." lib/ds4/
+      cp -a "$CRAFT_STAGE/usr/src/mlx/." lib/mlx-src/
+
+      # Include both upstream patches and this recipe in the runtime PTX cache key.
+      patch_stamp=$(cat patches/mlx*.patch "$CRAFT_PROJECT_DIR/snap/snapcraft.yaml" | sha256sum | cut -c1-16)
+      printf 'mlx=%s mlxc=%s backend=cuda cuda_arch=%s inputs=%s\n' \
+        64ea011cb65f14d9ce2737e60db9a4ae91ed7441 \
+        56b2d39fc831f2c0eb5bb94d82ef7191f7b31fa6 \
+        "$CUDA_ARCH" "$patch_stamp" > lib/mlx/.version
+
+      mkdir -p snap-jinja
+      for unit in caps lexer parser runtime jinja_string value jinja_wrapper; do
+        zig c++ -std=c++17 -O2 -DNDEBUG -mcpu="$ZIG_CPU" -I lib/jinja_cpp \
+          -c "lib/jinja_cpp/$unit.cpp" -o "snap-jinja/$unit.o"
+      done
+      ar rcsD lib/jinja_cpp/libjinja-linux.a snap-jinja/*.o
+      zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" \
+        -Dversion="$SNAPCRAFT_PROJECT_VERSION" -Dds4-commit=9139e2a
+      install -Dm755 zig-out/bin/mlx-serve "$CRAFT_PART_INSTALL/zig-out/bin/mlx-serve"
+      install -Dm644 lib/mlx/.version "$CRAFT_PART_INSTALL/lib/mlx/.version"
+      for license in LICENSE LICENSE-APACHE-2.0 NOTICE; do
+        install -Dm644 "$license" "$CRAFT_PART_INSTALL/usr/share/doc/mlx-serve/$license"
+      done
+
+  runtime:
+    plugin: dump
+    source: snap/local/runtime
+    organize:
+      '*.sh': libexec/mlx-serve/
+    build-packages:
+      - ca-certificates
+    stage-packages:
+      - curl
+      - ca-certificates
+      - libavahi-compat-libdnssd1
+      - liblapacke
+      - libopenblas0-pthread
+      - libwebp7
+      - libgomp1
+      - libstdc++6
+      # Header packages are intentional: MLX JIT compiles CUDA kernels at runtime.
+      - cuda-cudart-dev-13-4
+      - cuda-crt-13-4
+      - cuda-nvrtc-13-4
+      - libcublas-13-4
+      - libcufft-13-4
+      - libcusolver-13-4
+      - libcusparse-13-4
+      - libnvjitlink-13-4
+      - libcudnn9-cuda-13
+    override-build: |
+      craftctl default
+      install -Dm644 /etc/ssl/certs/ca-certificates.crt \
+        "$CRAFT_PART_INSTALL/etc/ssl/certs/ca-certificates.crt"
+    prime:
+      # The host supplies libcuda.so.1. Never ship CUDA's nonfunctional driver stubs.
+      - -usr/local/cuda-13.4/targets/*/lib/stubs
+      - -usr/local/cuda-13.4/targets/*/lib/*.a
+      - -usr/local/cuda-13.4/lib64/stubs
+      - -usr/local/cuda-13.4/bin
+      - -usr/local/cuda-13.4/nvvm
