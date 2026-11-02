@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Called only by the application launchers, never in the build environment.
 mlx_prepare_runtime() {
     export HOME="$1"
     umask 077
@@ -20,6 +19,5 @@ mlx_prepare_runtime() {
     export CURL_CA_BUNDLE="$SNAP/etc/ssl/certs/ca-certificates.crt"
     export SSL_CERT_FILE="$CURL_CA_BUNDLE"
 
-    # MLX selects its own build-stamped PTX cache below TMPDIR. A shared,
-    # unversioned MLX_PTX_CACHE_DIR would reuse kernels after an engine update.
+    # MLX keeps a build-specific kernel cache below TMPDIR.
 }

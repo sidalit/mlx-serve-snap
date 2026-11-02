@@ -63,8 +63,6 @@ apps:
       - opengl
 
 parts:
-  # The automation follows this one application tag. Other sources remain
-  # independently pinned to the revisions used by this release.
   mlx-serve-source:
     plugin: dump
     source: https://github.com/ddalcu/mlx-serve.git
@@ -295,8 +293,7 @@ parts:
     build-environment: *cuda-build-environment
     override-build: |
       set -euo pipefail
-      # Follow upstream's shared-library build, including hidden ggml stubs and
-      # static GNU C++ runtimes so they cannot replace Zig's exception machinery.
+      # Isolate the GNU C++ runtime from Zig's exception machinery.
       IFS=';' read -r -a arches <<< "$CUDA_ARCH"
       gencode=''
       for arch in "${arches[@]}"; do
