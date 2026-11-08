@@ -420,13 +420,11 @@ parts:
       - ca-certificates
     stage-packages:
       - curl
-      - ca-certificates
       - libavahi-compat-libdnssd1
       - liblapacke
       - libopenblas0-pthread
       - libwebp7
       - libgomp1
-      - libstdc++6
       # Header packages are intentional: MLX JIT compiles CUDA kernels at runtime.
       - cuda-cudart-dev-13-4
       - cuda-crt-13-4
