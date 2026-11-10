@@ -68,10 +68,23 @@ parts:
     source: https://github.com/ddalcu/mlx-serve.git
     source-tag: v$SNAPCRAFT_PROJECT_VERSION
     source-depth: 1
-    source-submodules:
-      - lib/opencode2-mlx-serve
-      - lib/mlx-serve-gguf
-      - lib/sushi
+    source-submodules: []
+    override-pull: |
+      craftctl default
+      # Fetch the submodules this commit still lists; upstream drops some over
+      # time. MLX, MLX-C and ds4 are built at the commits recorded here.
+      listed=$(git config --file .gitmodules --get-regexp '\.path$' | cut -d' ' -f2)
+      submodules=()
+      for path in lib/ds4 lib/mlx-src lib/mlxc-src \
+        lib/opencode2-mlx-serve lib/mlx-serve-gguf lib/sushi; do
+        if grep -qxF "$path" <<< "$listed"; then
+          submodules+=("$path")
+        fi
+      done
+      git submodule update --init --recursive -- "${submodules[@]}"
+      for path in lib/ds4 lib/mlx-src lib/mlxc-src; do
+        printf '%s %s\n' "$path" "$(git -C "$path" rev-parse HEAD)"
+      done > snap-submodule-commits
     organize:
       '*': usr/src/mlx-serve/
     prime:
@@ -155,10 +168,6 @@ parts:
 
   mlx:
     plugin: nil
-    source: https://github.com/ml-explore/mlx.git
-    source-commit: 64ea011cb65f14d9ce2737e60db9a4ae91ed7441
-    source-depth: 1
-    source-submodules: []
     after:
       - mlx-serve-source
       - json-source
@@ -188,20 +197,15 @@ parts:
           - NATIVE_CPU_FLAG: -march=armv8.2-a+dotprod
     override-build: |
       set -euo pipefail
-      patches="$CRAFT_STAGE/usr/src/mlx-serve/patches"
-      for patch in \
-        mlx-cuda-lru-consecutive-misses \
-        mlx-cuda-sdpa-head-dim-256-512 \
-        mlx-cuda-qmm-read-weights-once \
-        mlx-cuda-gather-qmm-rhs \
-        mlx-cuda-qmv-rows \
-        mlx-cuda-row-dot-matvec \
-        mlx-cuda-sorted-gather-experts \
-        mlx-cuda-graphs-switch \
-        mlx-cuda-sorted-gather-matvec \
-        mlx-cuda-custom-kernel-disk-cache; do
-        if ! git apply --reverse --check "$patches/$patch.patch" 2>/dev/null; then
-          git apply "$patches/$patch.patch"
+      src="$CRAFT_STAGE/usr/src/mlx-serve"
+      cp -a "$src/lib/mlx-src/." .
+      rm -rf .git
+      # Apply the MLX patches in the order upstream's Linux build uses.
+      patches=$(grep -oE 'patches/mlx-cuda-[a-z0-9-]+\.patch' \
+        "$src/scripts/build-mlx-linux.sh" | awk '!seen[$0]++')
+      for patch in $patches; do
+        if ! git apply --reverse --check "$src/$patch" 2>/dev/null; then
+          git apply "$src/$patch"
         fi
       done
 
@@ -246,15 +250,14 @@ parts:
 
   mlxc:
     plugin: nil
-    source: https://github.com/ml-explore/mlx-c.git
-    source-commit: 56b2d39fc831f2c0eb5bb94d82ef7191f7b31fa6
-    source-depth: 1
-    source-submodules: []
     after:
+      - mlx-serve-source
       - mlx
     build-environment: *cuda-build-environment
     override-build: |
       set -euo pipefail
+      cp -a "$CRAFT_STAGE/usr/src/mlx-serve/lib/mlxc-src/." .
+      rm -rf .git
       patches="$CRAFT_STAGE/usr/src/mlx-serve/patches"
       if ! git apply --reverse --check "$patches/mlxc-gather-qmm-global-scale.patch" 2>/dev/null; then
         git apply "$patches/mlxc-gather-qmm-global-scale.patch"
@@ -283,16 +286,16 @@ parts:
 
   ds4:
     plugin: nil
-    source: https://github.com/antirez/ds4.git
-    source-commit: 9139e2ae58a41503968a500f36f75895c1ba63fc
-    source-depth: 1
-    source-submodules: []
+    after:
+      - mlx-serve-source
     build-packages:
       - build-essential
       - cuda-toolkit-13-4
     build-environment: *cuda-build-environment
     override-build: |
       set -euo pipefail
+      cp -a "$CRAFT_STAGE/usr/src/mlx-serve/lib/ds4/." .
+      rm -rf .git
       # Isolate the GNU C++ runtime from Zig's exception machinery.
       IFS=';' read -r -a arches <<< "$CUDA_ARCH"
       gencode=''
@@ -383,19 +386,26 @@ parts:
     override-build: |
       set -euo pipefail
       cp -a "$CRAFT_STAGE/usr/src/mlx-serve/." .
+      # The parts above build these submodules; Zig gets only their headers.
+      rm -rf lib/ds4 lib/mlx-src lib/mlxc-src
+      mkdir -p lib/ds4 lib/mlx-src lib/mlxc-src
       cp -a "$CRAFT_STAGE/lib/mlx" lib/
       cp -a "$CRAFT_STAGE/lib/llama" lib/
       cp -a "$CRAFT_STAGE/lib/ds4-linux" lib/
-      mkdir -p lib/ds4 lib/mlx-src
       cp -a "$CRAFT_STAGE/usr/src/ds4/." lib/ds4/
       cp -a "$CRAFT_STAGE/usr/src/mlx/." lib/mlx-src/
+      commit() {
+        awk -v path="$1" '$1 == path { print $2; found = 1 } END { exit !found }' \
+          snap-submodule-commits
+      }
+      mlx_commit=$(commit lib/mlx-src)
+      mlxc_commit=$(commit lib/mlxc-src)
+      ds4_commit=$(commit lib/ds4)
 
       # Include both upstream patches and this recipe in the runtime PTX cache key.
       patch_stamp=$(cat patches/mlx*.patch "$CRAFT_PROJECT_DIR/snap/snapcraft.yaml" | sha256sum | cut -c1-16)
       printf 'mlx=%s mlxc=%s backend=cuda cuda_arch=%s inputs=%s\n' \
-        64ea011cb65f14d9ce2737e60db9a4ae91ed7441 \
-        56b2d39fc831f2c0eb5bb94d82ef7191f7b31fa6 \
-        "$CUDA_ARCH" "$patch_stamp" > lib/mlx/.version
+        "$mlx_commit" "$mlxc_commit" "$CUDA_ARCH" "$patch_stamp" > lib/mlx/.version
 
       mkdir -p snap-jinja
       for unit in caps lexer parser runtime jinja_string value jinja_wrapper; do
@@ -404,7 +414,7 @@ parts:
       done
       ar rcsD lib/jinja_cpp/libjinja-linux.a snap-jinja/*.o
       zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" \
-        -Dversion="$SNAPCRAFT_PROJECT_VERSION" -Dds4-commit=9139e2a
+        -Dversion="$SNAPCRAFT_PROJECT_VERSION" -Dds4-commit="${ds4_commit:0:7}"
       install -Dm755 zig-out/bin/mlx-serve "$CRAFT_PART_INSTALL/zig-out/bin/mlx-serve"
       install -Dm644 lib/mlx/.version "$CRAFT_PART_INSTALL/lib/mlx/.version"
       for license in LICENSE LICENSE-APACHE-2.0 NOTICE; do
