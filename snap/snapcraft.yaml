@@ -321,54 +321,41 @@ parts:
 
   llama:
     plugin: nil
-    source: https://github.com/ggml-org/llama.cpp.git
-    source-tag: b11429
-    source-depth: 1
-    source-submodules: []
+    after:
+      - mlx-serve-source
     build-packages:
-      - build-essential
-      - cmake
-      - cuda-toolkit-13-4
-    build-environment: *cuda-build-environment
+      - ca-certificates
+      - curl
+      - python3
     override-build: |
       set -euo pipefail
-      cmake -S . -B snap-build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/lib/llama \
-        -DCMAKE_INSTALL_LIBDIR=lib \
-        -DCMAKE_INSTALL_BINDIR=lib \
-        -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-        -DCMAKE_C_FLAGS="$NATIVE_CPU_FLAG" \
-        -DCMAKE_CXX_FLAGS="$NATIVE_CPU_FLAG" \
-        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
-        -DBUILD_SHARED_LIBS=ON \
-        -DGGML_CUDA=ON \
-        -DGGML_BACKEND_DL=ON \
-        -DGGML_NATIVE=OFF \
-        -DGGML_CPU_KLEIDIAI=OFF \
-        -DGGML_CUDA_CCCL_VERSION= \
-        -DGGML_CUDA_NCCL=OFF \
-        -DLLAMA_BUILD_COMMON=OFF \
-        -DLLAMA_BUILD_TESTS=OFF \
-        -DLLAMA_BUILD_TOOLS=OFF \
-        -DLLAMA_BUILD_EXAMPLES=OFF \
-        -DLLAMA_BUILD_SERVER=OFF \
-        -DLLAMA_BUILD_APP=OFF \
-        -DLLAMA_BUILD_UI=OFF \
-        -DLLAMA_BUILD_MTMD=OFF \
-        -DLLAMA_LLGUIDANCE=OFF \
-        -DLLAMA_TOOLS_INSTALL=OFF \
-        -DLLAMA_TESTS_INSTALL=OFF \
-        -DFETCHCONTENT_FULLY_DISCONNECTED=ON
-      cmake --build snap-build --parallel "$CRAFT_PARALLEL_BUILD_COUNT"
-      DESTDIR="$CRAFT_PART_INSTALL" cmake --install snap-build
-      printf 'b11429\n' > "$CRAFT_PART_INSTALL/lib/llama/.version"
-      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/llama.cpp/LICENSE"
+      # Use the official llama.cpp CUDA build pinned by upstream's
+      # scripts/fetch-llama.sh, as upstream's Linux CI and releases do.
+      fetch="$CRAFT_STAGE/usr/src/mlx-serve/scripts/fetch-llama.sh"
+      tag=$(sed -n 's/^LLAMA_TAG="${LLAMA_TAG:-\(b[0-9]*\)}"$/\1/p' "$fetch")
+      cuda=$(sed -n 's/^ *URL="$RELEASE\/llama-${LLAMA_TAG}-bin-ubuntu-cuda-\([0-9.]*\)-${ARCH}\.tar\.gz"$/\1/p' "$fetch")
+      if [ -z "$tag" ] || [ "$cuda" != 13.4 ]; then
+        echo "Unexpected llama.cpp pin in fetch-llama.sh: '$tag' for CUDA '$cuda'" >&2
+        exit 1
+      fi
+      case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
+      asset="llama-$tag-bin-ubuntu-cuda-$cuda-$arch.tar.gz"
+      digest=$(curl -fsSL "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/$tag" |
+        python3 -c 'import json, sys; print(next(a["digest"] for a in json.load(sys.stdin)["assets"] if a["name"] == sys.argv[1]))' "$asset")
+      curl -fL -o prebuilt.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$asset"
+      echo "${digest#sha256:}  prebuilt.tar.gz" | sha256sum --check --strict
+      curl -fL -o source.tar.gz "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$tag.tar.gz"
+      mkdir -p prebuilt source
+      tar -xzf prebuilt.tar.gz -C prebuilt
+      tar -xzf source.tar.gz -C source --strip-components=1
+      llama="$CRAFT_PART_INSTALL/lib/llama"
+      mkdir -p "$llama/lib" "$llama/include"
+      find prebuilt \( -name 'libllama.so*' -o -name 'libggml*.so*' \) -exec cp -P {} "$llama/lib/" \;
+      cp source/include/*.h source/ggml/include/*.h "$llama/include/"
+      printf '%s\n' "$tag" > "$llama/.version"
+      install -Dm644 source/LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/llama.cpp/LICENSE"
     prime:
       - -lib/llama/include
-      - -lib/llama/lib/cmake
-      - -lib/llama/lib/pkgconfig
-      - -lib/llama/share
 
   mlx-serve:
     plugin: nil
