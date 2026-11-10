@@ -197,6 +197,8 @@ parts:
           - NATIVE_CPU_FLAG: -march=armv8.2-a+dotprod
     override-build: |
       set -euo pipefail
+      # Release builds use the MLX from upstream's release tarball instead.
+      case "$SNAPCRAFT_PROJECT_VERSION" in git-*) ;; *) exit 0 ;; esac
       src="$CRAFT_STAGE/usr/src/mlx-serve"
       cp -a "$src/lib/mlx-src/." .
       rm -rf .git
@@ -256,6 +258,8 @@ parts:
     build-environment: *cuda-build-environment
     override-build: |
       set -euo pipefail
+      # Release builds use the MLX-C from upstream's release tarball instead.
+      case "$SNAPCRAFT_PROJECT_VERSION" in git-*) ;; *) exit 0 ;; esac
       cp -a "$CRAFT_STAGE/usr/src/mlx-serve/lib/mlxc-src/." .
       rm -rf .git
       patches="$CRAFT_STAGE/usr/src/mlx-serve/patches"
@@ -294,6 +298,8 @@ parts:
     build-environment: *cuda-build-environment
     override-build: |
       set -euo pipefail
+      # Release builds use the ds4 library from upstream's release tarball instead.
+      case "$SNAPCRAFT_PROJECT_VERSION" in git-*) ;; *) exit 0 ;; esac
       cp -a "$CRAFT_STAGE/usr/src/mlx-serve/lib/ds4/." .
       rm -rf .git
       # Isolate the GNU C++ runtime from Zig's exception machinery.
@@ -366,46 +372,71 @@ parts:
       - ds4
       - llama
     build-packages:
-      - pkg-config
-      - libwebp-dev
+      - ca-certificates
+      - curl
       - libavahi-compat-libdnssd-dev
+      - libwebp-dev
+      - pkg-config
+      - python3
     build-environment: *cuda-build-environment
     override-build: |
       set -euo pipefail
-      cp -a "$CRAFT_STAGE/usr/src/mlx-serve/." .
-      # The parts above build these submodules; Zig gets only their headers.
-      rm -rf lib/ds4 lib/mlx-src lib/mlxc-src
-      mkdir -p lib/ds4 lib/mlx-src lib/mlxc-src
-      cp -a "$CRAFT_STAGE/lib/mlx" lib/
-      cp -a "$CRAFT_STAGE/lib/llama" lib/
-      cp -a "$CRAFT_STAGE/lib/ds4-linux" lib/
-      cp -a "$CRAFT_STAGE/usr/src/ds4/." lib/ds4/
-      cp -a "$CRAFT_STAGE/usr/src/mlx/." lib/mlx-src/
-      commit() {
-        awk -v path="$1" '$1 == path { print $2; found = 1 } END { exit !found }' \
-          snap-submodule-commits
-      }
-      mlx_commit=$(commit lib/mlx-src)
-      mlxc_commit=$(commit lib/mlxc-src)
-      ds4_commit=$(commit lib/ds4)
+      src="$CRAFT_STAGE/usr/src/mlx-serve"
+      case "$SNAPCRAFT_PROJECT_VERSION" in
+        git-*)
+          cp -a "$src/." .
+          # The parts above build these submodules; Zig gets only their headers.
+          rm -rf lib/ds4 lib/mlx-src lib/mlxc-src
+          mkdir -p lib/ds4 lib/mlx-src lib/mlxc-src
+          cp -a "$CRAFT_STAGE/lib/mlx" lib/
+          cp -a "$CRAFT_STAGE/lib/llama" lib/
+          cp -a "$CRAFT_STAGE/lib/ds4-linux" lib/
+          cp -a "$CRAFT_STAGE/usr/src/ds4/." lib/ds4/
+          cp -a "$CRAFT_STAGE/usr/src/mlx/." lib/mlx-src/
+          commit() {
+            awk -v path="$1" '$1 == path { print $2; found = 1 } END { exit !found }' \
+              snap-submodule-commits
+          }
+          mlx_commit=$(commit lib/mlx-src)
+          mlxc_commit=$(commit lib/mlxc-src)
+          ds4_commit=$(commit lib/ds4)
 
-      # Include both upstream patches and this recipe in the runtime PTX cache key.
-      patch_stamp=$(cat patches/mlx*.patch "$CRAFT_PROJECT_DIR/snap/snapcraft.yaml" | sha256sum | cut -c1-16)
-      printf 'mlx=%s mlxc=%s backend=cuda cuda_arch=%s inputs=%s\n' \
-        "$mlx_commit" "$mlxc_commit" "$CUDA_ARCH" "$patch_stamp" > lib/mlx/.version
+          # Include both upstream patches and this recipe in the runtime PTX cache key.
+          patch_stamp=$(cat patches/mlx*.patch "$CRAFT_PROJECT_DIR/snap/snapcraft.yaml" | sha256sum | cut -c1-16)
+          printf 'mlx=%s mlxc=%s backend=cuda cuda_arch=%s inputs=%s\n' \
+            "$mlx_commit" "$mlxc_commit" "$CUDA_ARCH" "$patch_stamp" > lib/mlx/.version
 
-      mkdir -p snap-jinja
-      for unit in caps lexer parser runtime jinja_string value jinja_wrapper; do
-        zig c++ -std=c++17 -O2 -DNDEBUG -mcpu="$ZIG_CPU" -I lib/jinja_cpp \
-          -c "lib/jinja_cpp/$unit.cpp" -o "snap-jinja/$unit.o"
-      done
-      ar rcsD lib/jinja_cpp/libjinja-linux.a snap-jinja/*.o
-      zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" \
-        -Dversion="$SNAPCRAFT_PROJECT_VERSION" -Dds4-commit="${ds4_commit:0:7}"
-      install -Dm755 zig-out/bin/mlx-serve "$CRAFT_PART_INSTALL/zig-out/bin/mlx-serve"
-      install -Dm644 lib/mlx/.version "$CRAFT_PART_INSTALL/lib/mlx/.version"
+          mkdir -p snap-jinja
+          for unit in caps lexer parser runtime jinja_string value jinja_wrapper; do
+            zig c++ -std=c++17 -O2 -DNDEBUG -mcpu="$ZIG_CPU" -I lib/jinja_cpp \
+              -c "lib/jinja_cpp/$unit.cpp" -o "snap-jinja/$unit.o"
+          done
+          ar rcsD lib/jinja_cpp/libjinja-linux.a snap-jinja/*.o
+          zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" \
+            -Dversion="$SNAPCRAFT_PROJECT_VERSION" -Dds4-commit="${ds4_commit:0:7}"
+          install -Dm755 zig-out/bin/mlx-serve "$CRAFT_PART_INSTALL/zig-out/bin/mlx-serve"
+          install -Dm644 lib/mlx/.version "$CRAFT_PART_INSTALL/lib/mlx/.version"
+          ;;
+        *)
+          # Releases attach the Linux build from upstream's CI, with the same
+          # CUDA targets and MLX patches; use it instead of compiling. The llama
+          # part supplies llama.cpp, as in HEAD builds.
+          case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
+          tag="v$SNAPCRAFT_PROJECT_VERSION"
+          asset="mlx-serve-linux-$arch-cuda13.tar.gz"
+          digest=$(curl -fsSL "https://api.github.com/repos/ddalcu/mlx-serve/releases/tags/$tag" |
+            python3 -c 'import json, sys; print(next(a["digest"] for a in json.load(sys.stdin)["assets"] if a["name"] == sys.argv[1]))' "$asset")
+          curl -fL -o release.tar.gz "https://github.com/ddalcu/mlx-serve/releases/download/$tag/$asset"
+          echo "${digest#sha256:}  release.tar.gz" | sha256sum --check --strict
+          tar -xzf release.tar.gz -C "$CRAFT_PART_INSTALL" \
+            zig-out/bin/mlx-serve lib/mlx/lib lib/mlx/include lib/ds4-linux/libds4.so
+          install -Dm644 "$src/lib/mlx-src/LICENSE" "$CRAFT_PART_INSTALL/usr/share/doc/mlx/LICENSE"
+          install -Dm644 "$src/lib/mlxc-src/LICENSE" "$CRAFT_PART_INSTALL/usr/share/doc/mlx-c/LICENSE"
+          install -Dm644 "$src/lib/ds4/LICENSE" "$CRAFT_PART_INSTALL/usr/share/doc/ds4/LICENSE"
+          ;;
+      esac
       for license in LICENSE LICENSE-APACHE-2.0 NOTICE; do
-        install -Dm644 "$license" "$CRAFT_PART_INSTALL/usr/share/doc/mlx-serve/$license"
+        install -Dm644 "$src/$license" "$CRAFT_PART_INSTALL/usr/share/doc/mlx-serve/$license"
       done
 
   runtime:
