@@ -127,6 +127,7 @@ parts:
     plugin: dump
     source: https://github.com/NVIDIA/cccl/releases/download/v3.1.3/cccl-v3.1.3.zip
     source-type: zip
+    source-checksum: sha256/30f388ef784eb691d7de9d2cf918d53ab33464672500a17945b99d16af136cd6
     source-subdir: cccl-v3.1.3
     organize:
       '*': usr/src/cccl/
