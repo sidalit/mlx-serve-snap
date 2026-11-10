@@ -1,6 +1,6 @@
 name: mlx-serve
 base: core24
-version: '26.10.3'
+version: '26.11.2'
 title: MLX-Serve
 summary: Local model inference with OpenAI, Anthropic and Ollama APIs
 description: |
